@@ -373,7 +373,7 @@ def merge_percentiles(finalq, qs, vals, Ns, interpolation='lower'):
     Parameters
     ----------
     finalq : numpy.array
-        Percentiles to compute (must use same scale as ``qs``.
+        Percentiles to compute (must use same scale as ``qs``).
     qs : sequence of numpy.arrays
         Percentiles calculated on different sets of data.
     vals : sequence of numpy.arrays
@@ -396,7 +396,14 @@ def merge_percentiles(finalq, qs, vals, Ns, interpolation='lower'):
         count *= N
         counts.append(count)
 
-    # sort by calculated percentile values, then number of observations
+    # Sort by calculated percentile values, then number of observations.
+    # >95% of the time in this function is spent in `merge_sorted` below.
+    # An alternative that uses numpy sort is shown.  It is sometimes
+    # comparable to, but typically slower than, `merge_sorted`.
+    #
+    # >>> A = np.concatenate(map(np.array, map(zip, vals, counts)))
+    # >>> A.sort(0, kind='mergesort')
+
     combined_vals_counts = merge_sorted(*map(zip, vals, counts))
     combined_vals, combined_counts = zip(*combined_vals_counts)
 
@@ -412,10 +419,11 @@ def merge_percentiles(finalq, qs, vals, Ns, interpolation='lower'):
     # the behavior of different interpolation methods should be
     # investigated further.
     if interpolation == 'linear':
-        np.interp(desired_q, combined_q, combined_vals)
+        rv = np.interp(desired_q, combined_q, combined_vals)
     else:
         left = np.searchsorted(combined_q, desired_q, side='left')
         right = np.searchsorted(combined_q, desired_q, side='right') - 1
+        np.minimum(left, len(combined_vals) - 1, left) # don't exceed max index
         lower = np.minimum(left, right)
         upper = np.maximum(left, right)
         if interpolation == 'lower':
@@ -425,8 +433,8 @@ def merge_percentiles(finalq, qs, vals, Ns, interpolation='lower'):
         elif interpolation == 'midpoint':
             rv = 0.5*(combined_vals[lower] + combined_vals[upper])
         elif interpolation == 'nearest':
-            lower_residual = np.abs(cum[lower] - desired_q)
-            upper_residual = np.abs(cum[upper] - desired_q)
+            lower_residual = np.abs(combined_q[lower] - desired_q)
+            upper_residual = np.abs(combined_q[upper] - desired_q)
             mask = lower_residual > upper_residual
             index = lower  # alias; we no longer need lower
             index[mask] = upper[mask]
