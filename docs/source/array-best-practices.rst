@@ -54,6 +54,37 @@ Note that if you provide ``chunks='auto'`` then Dask Array will look for a
 ``.chunks`` attribute and use that to provide a good chunking.
 
 
+Limit Total Graph Size
+----------------------
+
+Each chunk in a Dask array is associated with at least one task in a Dask graph.
+Each task requires at least 1 kB of memory just to exist, even before any data
+is loaded or computations performed. If you're using the distributed scheduler,
+these graphs have to be serialized, sent over the network, and processed by the
+scheduler, which takes time (about 200 µs per task) and memory.
+
+For small graphs (100s or 1000s of tasks), this overhead is generally
+negligible. But once you reach a million tasks, it becomes noticeable and
+potentially problematic. At this point, the graph itself requires 1 GB of
+memory on both the client and the scheduler and takes over two minutes to
+process before any computations can even begin.
+
+Assuming a chunk size of 100 MB, an array of size 100 TB will require at least
+a million tasks. Most real calculations involve many chained computations,
+which multiply the number of tasks by a factor of 10-100. Consequently, the
+upper bound on the size of arrays Dask can comfortably process is 1-10 TB.
+This can be increased by using larger chunk sizes, provided enough RAM is
+available.
+
+Before discovering Dask, many users are accustomed to handling large datasets
+by simply writing big ``for`` loops. After discovering dask, we sometimes
+experience the opposite tendency: a desire to do *our entire analysis* from
+start to finish using one single enormous dask computation. For array datasets
+larger than several TB, this will not work, for the reasons outlined above.
+Instead, we need to find some way to split the problem into smaller pieces, as
+we were probably used to doing already before dask came along.
+
+
 Avoid Oversubscription
 ----------------------
 
