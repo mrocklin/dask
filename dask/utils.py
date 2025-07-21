@@ -745,23 +745,9 @@ class Dispatch:
         lk = self._lookup
         if cls in lk:
             return lk[cls]
+
         for cls2 in cls.__mro__:
             # Is a lazy registration function present?
-            try:
-                toplevel, _, _ = cls2.__module__.partition(".")
-            except Exception:
-                continue
-            try:
-                register = self._lazy[toplevel]
-            except KeyError:
-                pass
-            else:
-                register()
-                self._lazy.pop(toplevel, None)
-                meth = self.dispatch(cls)  # recurse
-                lk[cls] = meth
-                lk[cls2] = meth
-                return meth
             try:
                 impl = lk[cls2]
             except KeyError:
@@ -771,6 +757,24 @@ class Dispatch:
                     # Cache lookup
                     lk[cls] = impl
                 return impl
+            try:
+                modules = cls2.__module__.split(".")
+            except Exception:
+                continue
+
+            for i in range(len(modules)):
+                name = ".".join(modules[: i + 1])
+                try:
+                    register = self._lazy[name]
+                except KeyError:
+                    pass
+                else:
+                    register()
+                    self._lazy.pop(name, None)
+                    meth = self.dispatch(cls)  # recurse
+                    lk[cls] = meth
+                    lk[cls2] = meth
+                    return meth
         raise TypeError(f"No dispatch for {cls}")
 
     def __call__(self, arg, *args, **kwargs):

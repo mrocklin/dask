@@ -244,6 +244,19 @@ def test_dispatch_lazy_walks_mro():
     assert foo(Eager(1)) == "eager"
 
 
+def test_dispatch_lazy_submodule():
+    pd = pytest.importorskip("pandas")
+    foo = Dispatch()
+
+    @foo.register_lazy("pandas.core")
+    def register_decimal():
+        import pandas as pd
+
+        foo.register(pd.DataFrame, lambda x: 123)
+
+    assert foo(pd.DataFrame()) == 123
+
+
 def test_random_state_data():
     np = pytest.importorskip("numpy")
     seed = 37
