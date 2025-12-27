@@ -349,6 +349,9 @@ def axes_strategy(draw: st.DrawFn, *, ndim: int) -> None | int | tuple[int, ...]
 
 
 # Common reduction operations
-reduction_ops = st.sampled_from(
+reductions = st.sampled_from(
     ["sum", "mean", "std", "var", "min", "max", "prod", "any", "all"]
 )
+
+# Scan operations (cumulative)
+scans = st.sampled_from(["cumsum", "cumprod"])

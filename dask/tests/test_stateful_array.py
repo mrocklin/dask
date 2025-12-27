@@ -26,7 +26,8 @@ from dask.tests.strategies import (
     broadcast_to_shape,
     broadcastable_array,
     chunks,
-    reduction_ops,
+    reductions,
+    scans,
 )
 
 # Set numpy print options for concise output in notes
@@ -151,7 +152,7 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
 
     @rule(
         axes_data=st.data(),
-        op=reduction_ops,
+        op=reductions,
         use_nan_version=st.booleans(),
     )
     def reduction(self, axes_data, op, use_nan_version):
@@ -183,6 +184,38 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
             warnings.simplefilter("ignore", RuntimeWarning)
             self.numpy_array = getattr(np, op_name)(self.numpy_array, axis=axes)
             self.dask_array = getattr(da, op_name)(self.dask_array, axis=axes)
+
+        note(f"  -> shape {self.shape}")
+
+    @rule(
+        axis_data=st.data(),
+        op=scans,
+        use_nan_version=st.booleans(),
+    )
+    def scan(self, axis_data, op, use_nan_version):
+        """Apply a cumulative scan operation along a single axis."""
+        # Scans require a single axis (not None or tuple)
+        ndim = len(self.shape)
+        if ndim == 0:
+            # Can't scan 0-d arrays
+            return
+
+        # Generate a single axis
+        axis = axis_data.draw(st.integers(min_value=0, max_value=ndim - 1))
+
+        # Both cumsum and cumprod have nan-skipping versions
+        if use_nan_version:
+            op_name = f"nan{op}"
+        else:
+            op_name = op
+
+        note(f"Scan: {op_name}(axis={axis}), shape {self.shape}")
+
+        # Apply the scan operation
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            self.numpy_array = getattr(np, op_name)(self.numpy_array, axis=axis)
+            self.dask_array = getattr(da, op_name)(self.dask_array, axis=axis)
 
         note(f"  -> shape {self.shape}")
 
