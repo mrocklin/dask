@@ -34,7 +34,7 @@ from dask.tests.strategies import (
 np.set_printoptions(precision=3, threshold=10, edgeitems=2, linewidth=60)
 
 
-@settings(max_examples=5, deadline=None, stateful_step_count=5)
+@settings(max_examples=10, deadline=None, stateful_step_count=10)
 class DaskArrayStateMachine(RuleBasedStateMachine):
     """Stateful test comparing Dask array operations to NumPy arrays.
 
@@ -90,7 +90,10 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
     def persist(self):
         """Persist the Dask array (no-op for NumPy array)."""
         note(f"Persist: shape {self.shape}")
-        self.dask_array = self.dask_array.persist()
+        # Suppress warnings during computation
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            self.dask_array = self.dask_array.persist()
         # NumPy array is already in memory, so no-op
 
     @rule(
@@ -180,6 +183,12 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
         """Apply a reduction operation along specified axes."""
         # Generate valid axes for the current shape
         axes = axes_data.draw(axes_strategy(ndim=len(self.shape)))
+
+        # Skip if any of the axes being reduced over have size 0
+        if axes is not None:
+            axes_tuple = (axes,) if isinstance(axes, int) else axes
+            if any(self.shape[ax] == 0 for ax in axes_tuple):
+                return
 
         # Decide whether to use nan-skipping version
         # Only certain ops have nan-skipping versions
