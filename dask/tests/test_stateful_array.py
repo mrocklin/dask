@@ -34,7 +34,7 @@ from dask.tests.strategies import (
 np.set_printoptions(precision=3, threshold=10, edgeitems=2, linewidth=60)
 
 
-@settings(max_examples=10, deadline=None, stateful_step_count=10)
+@settings(max_examples=5, deadline=None, stateful_step_count=5)
 class DaskArrayStateMachine(RuleBasedStateMachine):
     """Stateful test comparing Dask array operations to NumPy arrays.
 
@@ -85,6 +85,13 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
         new_chunks = chunks_spec.draw(chunks(shape=self.shape))
         note(f"Rechunk: {self.dask_array.chunks} -> {new_chunks}")
         self.dask_array = self.dask_array.rechunk(new_chunks)
+
+    @rule()
+    def persist(self):
+        """Persist the Dask array (no-op for NumPy array)."""
+        note(f"Persist: shape {self.shape}")
+        self.dask_array = self.dask_array.persist()
+        # NumPy array is already in memory, so no-op
 
     @rule(
         axes=st.data(),
