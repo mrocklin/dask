@@ -348,10 +348,28 @@ def axes_strategy(draw: st.DrawFn, *, ndim: int) -> None | int | tuple[int, ...]
         return None
 
 
-# Common reduction operations
-reductions = st.sampled_from(
-    ["sum", "mean", "std", "var", "min", "max", "prod", "any", "all"]
-)
+@st.composite  # type: ignore[misc]
+def reductions(draw: st.DrawFn) -> str:
+    """Generate reduction operation names, optionally with nan-skipping versions.
+
+    Returns operation names like 'sum', 'nansum', 'mean', 'nanmean', etc.
+
+    Returns
+    -------
+    str
+        A reduction operation name
+    """
+    # Base operations
+    base_ops = ["sum", "mean", "std", "var", "min", "max", "prod", "any", "all"]
+    base_op = draw(st.sampled_from(base_ops))
+
+    # Operations that have nan-skipping versions
+    nan_ops = {"sum", "mean", "std", "var", "min", "max", "prod"}
+
+    # Randomly choose nan-skipping version if available
+    use_nan = draw(st.booleans())
+    return f"nan{base_op}" if (use_nan and base_op in nan_ops) else base_op
+
 
 # Scan operations (cumulative)
 scans = st.sampled_from(["cumsum", "cumprod"])

@@ -73,16 +73,14 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
         note(f"Initialize: shape={self.shape}, dtype={self.numpy_array.dtype}")
         note(f"Array expr enabled: {da._array_expr_enabled()}")
 
-    @rule(
-        chunks_spec=st.data(),
-    )
-    def rechunk(self, chunks_spec):
+    @rule(data=st.data())
+    def rechunk(self, data):
         """Rechunk the Dask array (NumPy array remains unchanged)."""
         # Skip rechunking if any dimension has size 0
         if 0 in self.shape:
             return
         # Generate valid chunks for the current shape
-        new_chunks = chunks_spec.draw(chunks(shape=self.shape))
+        new_chunks = data.draw(chunks(shape=self.shape))
         note(f"Rechunk: {self.dask_array.chunks} -> {new_chunks}")
         self.dask_array = self.dask_array.rechunk(new_chunks)
 
@@ -96,14 +94,12 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
             self.dask_array = self.dask_array.persist()
         # NumPy array is already in memory, so no-op
 
-    @rule(
-        axes=st.data(),
-    )
-    def transpose(self, axes):
+    @rule(data=st.data())
+    def transpose(self, data):
         """Transpose both NumPy and Dask arrays."""
         ndim = len(self.shape)
         # Generate a valid permutation of axes
-        axes_perm = axes.draw(st.permutations(range(ndim)))
+        axes_perm = data.draw(st.permutations(range(ndim)))
         note(
             f"Transpose: axes={axes_perm}, shape {self.shape} -> {tuple(self.shape[i] for i in axes_perm)}"
         )
@@ -111,19 +107,19 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
         self.dask_array = da.transpose(self.dask_array, axes_perm)
 
     @rule(
-        other=st.data(),
+        data=st.data(),
         op=st.sampled_from(
             [operator.add, operator.mul, operator.sub, operator.truediv]
         ),
     )
-    def binary_op(self, other, op):
+    def binary_op(self, data, op):
         """Apply a binary operation with a broadcastable array or scalar."""
         # Randomly choose between scalar and array
-        use_scalar = other.draw(st.booleans())
+        use_scalar = data.draw(st.booleans())
 
         if use_scalar:
             # Generate a scalar value
-            other_value = other.draw(
+            other_value = data.draw(
                 st.floats(
                     min_value=-100, max_value=100, allow_nan=False, allow_infinity=False
                 )
@@ -131,7 +127,7 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
             note(f"Binary op: {op.__name__} with scalar {other_value:.3f}")
         else:
             # Generate a broadcastable array
-            other_value = other.draw(
+            other_value = data.draw(
                 broadcastable_array(shape=self.shape, dtype=self.numpy_array.dtype)
             )
             note(
@@ -150,39 +146,31 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
             self.numpy_array = op(self.numpy_array, other_value)
             self.dask_array = op(self.dask_array, other_dask)
 
-    @rule(
-        index=st.data(),
-    )
-    def basic_indexing(self, index):
+    @rule(data=st.data())
+    def basic_indexing(self, data):
         """Apply basic indexing to both arrays."""
         # Generate a valid basic index for the current shape
-        idx = index.draw(npst.basic_indices(shape=self.shape))
+        idx = data.draw(npst.basic_indices(shape=self.shape))
         note(
             f"Basic indexing: {idx}, shape {self.shape} -> {self.numpy_array[idx].shape}"
         )
         self.numpy_array = self.numpy_array[idx]
         self.dask_array = self.dask_array[idx]
 
-    @rule(
-        new_shape=st.data(),
-    )
-    def broadcast(self, new_shape):
+    @rule(data=st.data())
+    def broadcast(self, data):
         """Broadcast both arrays to a compatible shape."""
         # Generate a shape that the current array can be broadcast to
-        target_shape = new_shape.draw(broadcast_to_shape(shape=self.shape))
+        target_shape = data.draw(broadcast_to_shape(shape=self.shape))
         note(f"Broadcast: shape {self.shape} -> {target_shape}")
         self.numpy_array = np.broadcast_to(self.numpy_array, target_shape)
         self.dask_array = da.broadcast_to(self.dask_array, target_shape)
 
-    @rule(
-        axes_data=st.data(),
-        op=reductions,
-        use_nan_version=st.booleans(),
-    )
-    def reduction(self, axes_data, op, use_nan_version):
+    @rule(data=st.data())
+    def reduction(self, data):
         """Apply a reduction operation along specified axes."""
         # Generate valid axes for the current shape
-        axes = axes_data.draw(axes_strategy(ndim=len(self.shape)))
+        axes = data.draw(axes_strategy(ndim=len(self.shape)))
 
         # Skip if any of the axes being reduced over have size 0
         if axes is not None:
@@ -190,19 +178,8 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
             if any(self.shape[ax] == 0 for ax in axes_tuple):
                 return
 
-        # Decide whether to use nan-skipping version
-        # Only certain ops have nan-skipping versions
-        nan_ops = {
-            "sum": "nansum",
-            "mean": "nanmean",
-            "std": "nanstd",
-            "var": "nanvar",
-            "min": "nanmin",
-            "max": "nanmax",
-            "prod": "nanprod",
-        }
-
-        op_name = nan_ops[op] if (use_nan_version and op in nan_ops) else op
+        # Draw reduction operation (already includes nan-version logic)
+        op_name = data.draw(reductions())
         note(f"Reduction: {op_name}(axis={axes}), shape {self.shape}")
 
         # Apply the reduction operation
@@ -214,11 +191,11 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
         note(f"  -> shape {self.shape}")
 
     @rule(
-        axis_data=st.data(),
+        data=st.data(),
         op=scans,
         use_nan_version=st.booleans(),
     )
-    def scan(self, axis_data, op, use_nan_version):
+    def scan(self, data, op, use_nan_version):
         """Apply a cumulative scan operation along a single axis."""
         # Scans require a single axis (not None or tuple)
         ndim = len(self.shape)
@@ -227,7 +204,7 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
             return
 
         # Generate a single axis
-        axis = axis_data.draw(st.integers(min_value=0, max_value=ndim - 1))
+        axis = data.draw(st.integers(min_value=0, max_value=ndim - 1))
 
         # Both cumsum and cumprod have nan-skipping versions
         op_name = f"nan{op}" if use_nan_version else op
