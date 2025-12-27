@@ -107,23 +107,37 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
         ),
     )
     def binary_op(self, other, op):
-        """Apply a binary operation with a broadcastable array."""
-        # Generate a broadcastable array
-        other_array = other.draw(
-            broadcastable_array(shape=self.shape, dtype=self.numpy_array.dtype)
-        )
-        other_dask = da.from_array(other_array, chunks=-1)
+        """Apply a binary operation with a broadcastable array or scalar."""
+        # Randomly choose between scalar and array
+        use_scalar = other.draw(st.booleans())
 
-        op_name = op.__name__
-        note(
-            f"Binary op: {op_name} with shape {other_array.shape} (broadcast to {self.shape})"
+        if use_scalar:
+            # Generate a scalar value
+            other_value = other.draw(
+                st.floats(
+                    min_value=-100, max_value=100, allow_nan=False, allow_infinity=False
+                )
+            )
+            note(f"Binary op: {op.__name__} with scalar {other_value:.3f}")
+        else:
+            # Generate a broadcastable array
+            other_value = other.draw(
+                broadcastable_array(shape=self.shape, dtype=self.numpy_array.dtype)
+            )
+            note(
+                f"Binary op: {op.__name__} with shape {other_value.shape} (broadcast to {self.shape})"
+            )
+
+        # Convert to dask if array
+        other_dask = (
+            other_value if use_scalar else da.from_array(other_value, chunks=-1)
         )
 
         # Apply the operation (division by zero results in inf/nan, which is handled naturally)
         # Suppress numpy warnings for operations like divide by zero, overflow, etc.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
-            self.numpy_array = op(self.numpy_array, other_array)
+            self.numpy_array = op(self.numpy_array, other_value)
             self.dask_array = op(self.dask_array, other_dask)
 
     @rule(
@@ -172,12 +186,8 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
             "prod": "nanprod",
         }
 
-        if use_nan_version and op in nan_ops:
-            op_name = nan_ops[op]
-            note(f"Reduction: {op_name}(axis={axes}), shape {self.shape}")
-        else:
-            op_name = op
-            note(f"Reduction: {op_name}(axis={axes}), shape {self.shape}")
+        op_name = nan_ops[op] if (use_nan_version and op in nan_ops) else op
+        note(f"Reduction: {op_name}(axis={axes}), shape {self.shape}")
 
         # Apply the reduction operation
         with warnings.catch_warnings():
@@ -204,11 +214,7 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
         axis = axis_data.draw(st.integers(min_value=0, max_value=ndim - 1))
 
         # Both cumsum and cumprod have nan-skipping versions
-        if use_nan_version:
-            op_name = f"nan{op}"
-        else:
-            op_name = op
-
+        op_name = f"nan{op}" if use_nan_version else op
         note(f"Scan: {op_name}(axis={axis}), shape {self.shape}")
 
         # Apply the scan operation
