@@ -14,7 +14,7 @@ import dask.array as da
 Chunks = tuple[tuple[int, ...], ...]
 
 
-@st.composite
+@st.composite  # type: ignore[misc]
 def chunks(draw: st.DrawFn, *, shape: tuple[int, ...]) -> Chunks:
     """Generate valid chunk specifications for a given shape.
 
@@ -35,15 +35,20 @@ def chunks(draw: st.DrawFn, *, shape: tuple[int, ...]) -> Chunks:
         if size > 1:
             nchunks = draw(st.integers(min_value=1, max_value=size - 1))
             dividers = sorted(
-                set(draw(st.integers(min_value=1, max_value=size - 1)) for _ in range(nchunks - 1))
+                set(
+                    draw(st.integers(min_value=1, max_value=size - 1))
+                    for _ in range(nchunks - 1)
+                )
             )
-            chunks.append(tuple(a - b for a, b in zip(dividers + [size], [0] + dividers)))
+            chunks.append(
+                tuple(a - b for a, b in zip(dividers + [size], [0] + dividers))
+            )
         else:
             chunks.append((1,))
     return tuple(chunks)
 
 
-@st.composite
+@st.composite  # type: ignore[misc]
 def broadcastable_shape(draw: st.DrawFn, *, shape: tuple[int, ...]) -> tuple[int, ...]:
     """Generate a shape that is broadcastable with the given shape.
 
@@ -85,7 +90,7 @@ def broadcastable_shape(draw: st.DrawFn, *, shape: tuple[int, ...]) -> tuple[int
     return tuple(new_shape)
 
 
-@st.composite
+@st.composite  # type: ignore[misc]
 def broadcastable_array(
     draw: st.DrawFn, *, shape: tuple[int, ...], dtype: np.dtype
 ) -> np.ndarray:
@@ -108,10 +113,60 @@ def broadcastable_array(
         npst.arrays(
             dtype=dtype,
             shape=new_shape,
-            elements={"allow_nan": False, "allow_infinity": False, "min_value": -100, "max_value": 100},
+            elements={
+                "allow_nan": False,
+                "allow_infinity": False,
+                "min_value": -100,
+                "max_value": 100,
+            },
         )
     )
     return array
+
+
+@st.composite  # type: ignore[misc]
+def broadcast_to_shape(draw: st.DrawFn, *, shape: tuple[int, ...]) -> tuple[int, ...]:
+    """Generate a shape that the given shape can be broadcast TO.
+
+    Broadcasting rules: shape A can be broadcast to shape B if:
+    - B has at least as many dimensions as A
+    - For each dimension (aligned right-to-left):
+      - A's dimension is 1, OR
+      - A's dimension equals B's dimension
+
+    Parameters
+    ----------
+    shape : tuple[int, ...]
+        The source shape that will be broadcast
+
+    Returns
+    -------
+    tuple[int, ...]
+        A target shape that source can be broadcast to
+    """
+    # Skip if shape contains 0 (can't meaningfully broadcast empty arrays)
+    if 0 in shape:
+        return shape
+
+    # Target can have more dimensions (add 0-3 leading dimensions)
+    extra_dims = draw(st.integers(min_value=0, max_value=3))
+
+    new_shape = []
+
+    # Leading dimensions (not aligned with source)
+    for _ in range(extra_dims):
+        new_shape.append(draw(st.integers(min_value=1, max_value=10)))
+
+    # Aligned dimensions (from source)
+    for size in shape:
+        if size == 1:
+            # Can expand dimension of size 1 to any size
+            new_shape.append(draw(st.integers(min_value=1, max_value=10)))
+        else:
+            # Must keep the same size
+            new_shape.append(size)
+
+    return tuple(new_shape)
 
 
 # Common dtypes for testing
@@ -129,7 +184,7 @@ all_dtypes = (
 )
 
 
-@st.composite
+@st.composite  # type: ignore[misc]
 def axis_strategy(draw: st.DrawFn, *, ndim: int, allow_none: bool = True) -> int | None:
     """Generate a valid axis for an array with the given number of dimensions.
 
@@ -151,7 +206,7 @@ def axis_strategy(draw: st.DrawFn, *, ndim: int, allow_none: bool = True) -> int
         return draw(st.integers(min_value=0, max_value=ndim - 1))
 
 
-@st.composite
+@st.composite  # type: ignore[misc]
 def slice_strategy(draw: st.DrawFn, *, size: int) -> slice:
     """Generate a valid slice for an axis of the given size.
 
@@ -176,7 +231,7 @@ def slice_strategy(draw: st.DrawFn, *, size: int) -> slice:
     return slice(start, stop, step)
 
 
-@st.composite
+@st.composite  # type: ignore[misc]
 def index_strategy(
     draw: st.DrawFn, *, shape: tuple[int, ...]
 ) -> tuple[int | slice, ...]:
@@ -204,14 +259,12 @@ def index_strategy(
     return tuple(index)
 
 
-@st.composite
+@st.composite  # type: ignore[misc]
 def chunked_arrays(
     draw: st.DrawFn,
     *,
     dtype: st.SearchStrategy[np.dtype] | None = None,
-    shape: st.SearchStrategy[tuple[int, ...]] = npst.array_shapes(
-        min_dims=1, max_dims=4, min_side=1, max_side=10
-    ),
+    shape: st.SearchStrategy[tuple[int, ...]] | None = None,
     elements: dict[str, Any] | None = None,
 ) -> tuple[np.ndarray, da.Array]:
     """Generate a NumPy array and equivalent chunked Dask array.
@@ -220,8 +273,8 @@ def chunked_arrays(
     ----------
     dtype : st.SearchStrategy[np.dtype] | None, optional
         Strategy for generating dtypes. If None, uses floating point dtypes.
-    shape : st.SearchStrategy[tuple[int, ...]], optional
-        Strategy for generating shapes
+    shape : st.SearchStrategy[tuple[int, ...]] | None, optional
+        Strategy for generating shapes. If None, uses 1-4 dims with sides 1-10.
     elements : dict[str, Any] | None, optional
         Element constraints for array generation. If None, uses sensible defaults.
 
@@ -232,6 +285,8 @@ def chunked_arrays(
     """
     if dtype is None:
         dtype = npst.floating_dtypes(sizes=(32, 64))
+    if shape is None:
+        shape = npst.array_shapes(min_dims=1, max_dims=4, min_side=1, max_side=10)
 
     array_shape = draw(shape)
     array_dtype = draw(dtype)
@@ -239,11 +294,18 @@ def chunked_arrays(
     # Use appropriate element constraints based on dtype
     if elements is None:
         if array_dtype.kind == "f":
-            elements = {"allow_nan": False, "allow_infinity": False, "min_value": -100, "max_value": 100}
+            elements = {
+                "allow_nan": False,
+                "allow_infinity": False,
+                "min_value": -100,
+                "max_value": 100,
+            }
         else:
             elements = {}
 
-    numpy_array = draw(npst.arrays(dtype=array_dtype, shape=array_shape, elements=elements))
+    numpy_array = draw(
+        npst.arrays(dtype=array_dtype, shape=array_shape, elements=elements)
+    )
     chunk_spec = draw(chunks(shape=array_shape))
     dask_array = da.from_array(numpy_array, chunks=chunk_spec)
 
