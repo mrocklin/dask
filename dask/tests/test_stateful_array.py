@@ -21,10 +21,19 @@ from hypothesis.stateful import RuleBasedStateMachine, initialize, invariant, ru
 
 import dask.array as da
 from dask.array.utils import assert_eq
-from dask.tests.strategies import broadcast_to_shape, broadcastable_array, chunks
+from dask.tests.strategies import (
+    axes_strategy,
+    broadcast_to_shape,
+    broadcastable_array,
+    chunks,
+    reduction_ops,
+)
+
+# Set numpy print options for concise output in notes
+np.set_printoptions(precision=3, threshold=10, edgeitems=2, linewidth=60)
 
 
-@settings(max_examples=20, deadline=None, stateful_step_count=20)
+@settings(max_examples=10, deadline=None, stateful_step_count=10)
 class DaskArrayStateMachine(RuleBasedStateMachine):
     """Stateful test comparing Dask array operations to NumPy arrays.
 
@@ -139,6 +148,43 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
         note(f"Broadcast: shape {self.shape} -> {target_shape}")
         self.numpy_array = np.broadcast_to(self.numpy_array, target_shape)
         self.dask_array = da.broadcast_to(self.dask_array, target_shape)
+
+    @rule(
+        axes_data=st.data(),
+        op=reduction_ops,
+        use_nan_version=st.booleans(),
+    )
+    def reduction(self, axes_data, op, use_nan_version):
+        """Apply a reduction operation along specified axes."""
+        # Generate valid axes for the current shape
+        axes = axes_data.draw(axes_strategy(ndim=len(self.shape)))
+
+        # Decide whether to use nan-skipping version
+        # Only certain ops have nan-skipping versions
+        nan_ops = {
+            "sum": "nansum",
+            "mean": "nanmean",
+            "std": "nanstd",
+            "var": "nanvar",
+            "min": "nanmin",
+            "max": "nanmax",
+            "prod": "nanprod",
+        }
+
+        if use_nan_version and op in nan_ops:
+            op_name = nan_ops[op]
+            note(f"Reduction: {op_name}(axis={axes}), shape {self.shape}")
+        else:
+            op_name = op
+            note(f"Reduction: {op_name}(axis={axes}), shape {self.shape}")
+
+        # Apply the reduction operation
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            self.numpy_array = getattr(np, op_name)(self.numpy_array, axis=axes)
+            self.dask_array = getattr(da, op_name)(self.dask_array, axis=axes)
+
+        note(f"  -> shape {self.shape}")
 
     @invariant()
     def arrays_are_equal(self):

@@ -312,6 +312,42 @@ def chunked_arrays(
     return numpy_array, dask_array
 
 
+@st.composite  # type: ignore[misc]
+def axes_strategy(draw: st.DrawFn, *, ndim: int) -> None | int | tuple[int, ...]:
+    """Generate valid axes for reductions on an array with the given ndim.
+
+    Can generate:
+    - None (reduce over all axes)
+    - A single integer axis
+    - A tuple of one or more axes (without duplicates)
+
+    Parameters
+    ----------
+    ndim : int
+        The number of dimensions
+
+    Returns
+    -------
+    None | int | tuple[int, ...]
+        A valid axis specification for a reduction
+    """
+    if ndim == 0:
+        # 0-d arrays can only reduce with axis=None
+        return None
+
+    choice = draw(st.sampled_from(["single", "tuple", "none"]))
+
+    if choice == "single":
+        return draw(st.integers(min_value=0, max_value=ndim - 1))
+    elif choice == "tuple":
+        # Generate a non-empty subset of axes
+        num_axes = draw(st.integers(min_value=1, max_value=ndim))
+        axes_list = draw(st.permutations(range(ndim)))[:num_axes]
+        return tuple(sorted(axes_list))
+    else:  # none
+        return None
+
+
 # Common reduction operations
 reduction_ops = st.sampled_from(
     ["sum", "mean", "std", "var", "min", "max", "prod", "any", "all"]
