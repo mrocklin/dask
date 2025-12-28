@@ -230,8 +230,8 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
             # Use relaxed tolerance for float32 to handle precision differences
-            rtol = 1e-5 if self.numpy_array.dtype == np.float32 else 1e-7
-            assert_eq(self.dask_array, self.numpy_array, rtol=rtol)
+            # rtol = 1e-5 if self.numpy_array.dtype == np.float32 else 1e-7
+            assert_eq(self.dask_array, self.numpy_array)
 
 
 # Create the test
