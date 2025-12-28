@@ -86,18 +86,23 @@ from dask.tests.strategies import (
 ### Using `chunks` strategy
 
 ```python
-@rule(chunks_spec=st.data())
-def rechunk(self, chunks_spec):
-    new_chunks = chunks_spec.draw(chunks(shape=self.shape))
+# Use data.draw() because strategy depends on self.shape
+@rule(data=st.data())
+def rechunk(self, data):
+    new_chunks = data.draw(chunks(shape=self.shape))
     self.dask_array = self.dask_array.rechunk(new_chunks)
 ```
 
 ### Using `broadcastable_array`
 
 ```python
-@rule(other=st.data(), op=st.sampled_from([operator.add, operator.mul]))
-def binary_op(self, other, op):
-    other_arr = other.draw(broadcastable_array(
+# op is independent, but other_arr depends on state (self.shape, self.dtype)
+@rule(
+    data=st.data(),
+    op=st.sampled_from([operator.add, operator.mul])
+)
+def binary_op(self, data, op):
+    other_arr = data.draw(broadcastable_array(
         shape=self.shape,
         dtype=self.numpy_array.dtype
     ))
@@ -126,6 +131,8 @@ Start simple and add complexity:
 ### Step 1: Single operation
 
 ```python
+from hypothesis import assume
+
 @settings(max_examples=5, deadline=None, stateful_step_count=3)
 class DaskArrayStateMachine(RuleBasedStateMachine):
     @initialize(arrays=npst.arrays(...))
@@ -133,9 +140,10 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
         self.numpy_array = arrays
         self.dask_array = da.from_array(arrays, chunks=-1)
 
-    @rule(chunks_spec=st.data())
-    def rechunk(self, chunks_spec):
-        new_chunks = chunks_spec.draw(chunks(shape=self.shape))
+    @rule(data=st.data())
+    def rechunk(self, data):
+        assume(0 not in self.shape)  # Skip 0-sized dimensions
+        new_chunks = data.draw(chunks(shape=self.shape))
         self.dask_array = self.dask_array.rechunk(new_chunks)
 
     @invariant()
@@ -146,10 +154,10 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
 ### Step 2: Add another operation
 
 ```python
-    @rule(axes=st.data())
-    def transpose(self, axes):
+    @rule(data=st.data())
+    def transpose(self, data):
         ndim = len(self.shape)
-        axes_perm = axes.draw(st.permutations(range(ndim)))
+        axes_perm = data.draw(st.permutations(range(ndim)))
         self.numpy_array = np.transpose(self.numpy_array, axes_perm)
         self.dask_array = da.transpose(self.dask_array, axes_perm)
 ```
@@ -157,9 +165,12 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
 ### Step 3: Add operations that change values
 
 ```python
-    @rule(other=st.data(), op=st.sampled_from([operator.add, operator.mul]))
-    def binary_op(self, other, op):
-        other_arr = other.draw(broadcastable_array(
+    @rule(
+        data=st.data(),
+        op=st.sampled_from([operator.add, operator.mul])
+    )
+    def binary_op(self, data, op):
+        other_arr = data.draw(broadcastable_array(
             shape=self.shape,
             dtype=self.numpy_array.dtype
         ))
@@ -171,20 +182,112 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
 ### Step 4: Add reductions, slicing, etc.
 
 ```python
-    @rule(idx=st.data())
-    def getitem(self, idx):
-        index = idx.draw(index_strategy(shape=self.shape))
+    @rule(data=st.data())
+    def getitem(self, data):
+        index = data.draw(index_strategy(shape=self.shape))
         self.numpy_array = self.numpy_array[index]
         self.dask_array = self.dask_array[index]
 
-    @rule(axis=st.data())
-    def sum_axis(self, axis):
-        ax = axis.draw(axis_strategy(ndim=len(self.shape)))
+    @rule(data=st.data())
+    def sum_axis(self, data):
+        ax = data.draw(axis_strategy(ndim=len(self.shape)))
         self.numpy_array = self.numpy_array.sum(axis=ax)
         self.dask_array = self.dask_array.sum(axis=ax)
 ```
 
 ## Best Practices
+
+### Use Consistent `data` Parameter Naming
+
+Always use `data=st.data()` as the parameter name (not `axes_data`, `other`, `index`, etc.):
+
+```python
+# Good
+@rule(data=st.data())
+def rechunk(self, data):
+    new_chunks = data.draw(chunks(shape=self.shape))
+
+# Bad - inconsistent naming
+@rule(chunks_spec=st.data())
+def rechunk(self, chunks_spec):
+    new_chunks = chunks_spec.draw(chunks(shape=self.shape))
+```
+
+### Prefer Direct Strategy Parameters Over `data.draw()`
+
+Use `data.draw()` only for **data-dependent draws** (where the strategy depends on state). For independent strategies, pass them directly as rule parameters:
+
+```python
+# Good - strategy doesn't depend on state
+@rule(
+    op=st.sampled_from([operator.add, operator.mul, operator.sub]),
+    scalar=st.floats(min_value=-100, max_value=100)
+)
+def binary_op_scalar(self, op, scalar):
+    self.numpy_array = op(self.numpy_array, scalar)
+    self.dask_array = op(self.dask_array, scalar)
+
+# Bad - unnecessary data.draw() for independent strategy
+@rule(data=st.data())
+def binary_op_scalar(self, data):
+    op = data.draw(st.sampled_from([operator.add, operator.mul]))
+    scalar = data.draw(st.floats(min_value=-100, max_value=100))
+    # ...
+
+# Good - data.draw() needed because strategy depends on self.shape
+@rule(data=st.data())
+def rechunk(self, data):
+    new_chunks = data.draw(chunks(shape=self.shape))
+    self.dask_array = self.dask_array.rechunk(new_chunks)
+```
+
+### Prefer `assume()` and `precondition()` Over Early Returns
+
+Use Hypothesis's `assume()` or `@precondition` decorator instead of early return statements to skip invalid cases:
+
+```python
+from hypothesis import assume
+from hypothesis.stateful import precondition
+
+# Good - using assume()
+@rule(data=st.data())
+def reduction(self, data):
+    axes = data.draw(axes_strategy(ndim=len(self.shape)))
+    # Skip if reducing over 0-sized dimensions
+    if axes is None:
+        assume(all(s > 0 for s in self.shape))
+    else:
+        axes_tuple = (axes,) if isinstance(axes, int) else axes
+        assume(all(self.shape[ax] > 0 for ax in axes_tuple))
+    # ... apply reduction
+
+# Good - using @precondition decorator
+@precondition(lambda self: len(self.shape) > 0)
+@rule(data=st.data())
+def transpose(self, data):
+    # This rule only runs if shape is non-empty
+    axes_perm = data.draw(st.permutations(range(len(self.shape))))
+    # ...
+
+# Bad - early return makes Hypothesis less effective
+@rule(data=st.data())
+def reduction(self, data):
+    axes = data.draw(axes_strategy(ndim=len(self.shape)))
+    if axes is None and any(s == 0 for s in self.shape):
+        return  # Wastes a test example
+    # ... apply reduction
+```
+
+**Why prefer `assume()`?**
+- Early returns waste test examples (Hypothesis still counts them)
+- `assume()` lets Hypothesis know to generate different examples
+- Better shrinking behavior when failures occur
+- More explicit about preconditions
+
+**When to use each:**
+- `assume()`: For conditions that depend on drawn values
+- `@precondition`: For conditions that only depend on current state
+- Early return: Only when absolutely necessary (rare)
 
 ### Use `note()` for Debugging
 
@@ -305,9 +408,21 @@ class DataFrameStateMachine(RuleBasedStateMachine):
 ### Testing Reductions
 
 ```python
-@rule(axis=st.data(), op=st.sampled_from(["sum", "mean", "std"]))
-def reduction(self, axis, op):
-    ax = axis.draw(axis_strategy(ndim=len(self.shape)))
+from hypothesis import assume
+
+@rule(
+    data=st.data(),
+    op=st.sampled_from(["sum", "mean", "std"])
+)
+def reduction(self, data, op):
+    ax = data.draw(axis_strategy(ndim=len(self.shape)))
+    # Skip if reducing over 0-sized axes
+    if ax is None:
+        assume(all(s > 0 for s in self.shape))
+    else:
+        axes_tuple = (ax,) if isinstance(ax, int) else ax
+        assume(all(self.shape[a] > 0 for a in axes_tuple))
+
     note(f"Reduction: {op} along axis={ax}")
     self.numpy_array = getattr(self.numpy_array, op)(axis=ax)
     self.dask_array = getattr(self.dask_array, op)(axis=ax)
