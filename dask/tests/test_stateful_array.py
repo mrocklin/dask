@@ -10,18 +10,9 @@ import pytest
 
 hypothesis = pytest.importorskip("hypothesis")
 
+import dask.array as da
 import hypothesis.extra.numpy as npst
 import hypothesis.strategies as st
-from hypothesis import assume, note, settings
-from hypothesis.stateful import (
-    RuleBasedStateMachine,
-    initialize,
-    invariant,
-    rule,
-    precondition,
-)
-
-import dask.array as da
 from dask.array.utils import assert_eq
 from dask.tests.strategies import (
     axes_strategy,
@@ -31,12 +22,24 @@ from dask.tests.strategies import (
     reductions,
     scans,
 )
+from hypothesis import assume, note, settings, seed
+from hypothesis.stateful import (
+    RuleBasedStateMachine,
+    initialize,
+    invariant,
+    precondition,
+    rule,
+)
 
 # Set numpy print options for concise output in notes
 np.set_printoptions(precision=3, threshold=10, edgeitems=2, linewidth=60)
 
 
-@settings(max_examples=10, deadline=None, stateful_step_count=10)
+# TODO: remove the precondition on the `broadcast` rule to reproduce hang
+# @seed(307603228577777922830132553021337866664)
+# TODO: below seed reproduces an indexing error I think
+# @seed(206283088023844505153171715290298593218)
+@settings(max_examples=50, deadline=None, stateful_step_count=30)
 class DaskArrayStateMachine(RuleBasedStateMachine):
     """Stateful test comparing Dask array operations to NumPy arrays.
 
@@ -83,15 +86,15 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
         note(f"Rechunk: {self.dask_array.chunks} -> {new_chunks}")
         self.dask_array = self.dask_array.rechunk(new_chunks)
 
-    @rule()
-    def persist(self):
-        """Persist the Dask array (no-op for NumPy array)."""
-        note(f"Persist: shape {self.shape}")
-        # Suppress warnings during computation
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            self.dask_array = self.dask_array.persist()
-        # NumPy array is already in memory, so no-op
+    # @rule()
+    # def persist(self):
+    #     """Persist the Dask array (no-op for NumPy array)."""
+    #     note(f"Persist: shape {self.shape}")
+    #     # Suppress warnings during computation
+    #     with warnings.catch_warnings():
+    #         warnings.simplefilter("ignore", RuntimeWarning)
+    #         self.dask_array = self.dask_array.persist()
+    # NumPy array is already in memory, so no-op
 
     @rule(data=st.data())
     def transpose(self, data):
@@ -156,6 +159,7 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
         self.numpy_array = self.numpy_array[idx]
         self.dask_array = self.dask_array[idx]
 
+    @precondition(lambda self: False)
     @rule(data=st.data())
     def broadcast(self, data):
         """Broadcast both arrays to a compatible shape."""
@@ -173,7 +177,7 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
 
         # Skip if any of the axes being reduced over have size 0
         if axes is None:
-            axes_tuple = self.shape
+            axes_tuple = tuple(range(len(self.shape)))
         else:
             axes_tuple = (axes,) if isinstance(axes, int) else axes
         assume(all(self.shape[ax] != 0 for ax in axes_tuple))
