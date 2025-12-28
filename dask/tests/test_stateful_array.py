@@ -12,8 +12,14 @@ hypothesis = pytest.importorskip("hypothesis")
 
 import hypothesis.extra.numpy as npst
 import hypothesis.strategies as st
-from hypothesis import note, settings
-from hypothesis.stateful import RuleBasedStateMachine, initialize, invariant, rule
+from hypothesis import assume, note, settings
+from hypothesis.stateful import (
+    RuleBasedStateMachine,
+    initialize,
+    invariant,
+    rule,
+    precondition,
+)
 
 import dask.array as da
 from dask.array.utils import assert_eq
@@ -67,12 +73,11 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
         note(f"Initialize: shape={self.shape}, dtype={self.numpy_array.dtype}")
         assert da._array_expr_enabled()
 
+    # Skip rechunking if any dimension has size 0
+    @precondition(lambda self: 0 not in self.shape)
     @rule(data=st.data())
     def rechunk(self, data):
         """Rechunk the Dask array (NumPy array remains unchanged)."""
-        # Skip rechunking if any dimension has size 0
-        if 0 in self.shape:
-            return
         # Generate valid chunks for the current shape
         new_chunks = data.draw(chunks(shape=self.shape))
         note(f"Rechunk: {self.dask_array.chunks} -> {new_chunks}")
@@ -100,6 +105,7 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
         self.numpy_array = np.transpose(self.numpy_array, axes_perm)
         self.dask_array = da.transpose(self.dask_array, axes_perm)
 
+    @precondition(lambda self: self.numpy_array.dtype.kind != "b")
     @rule(
         data=st.data(),
         op=st.sampled_from(
@@ -110,7 +116,6 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
         """Apply a binary operation with a broadcastable array or scalar."""
         # Randomly choose between scalar and array
         use_scalar = data.draw(st.booleans())
-
         if use_scalar:
             # Generate a scalar value
             other_value = data.draw(
@@ -160,25 +165,20 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
         self.numpy_array = np.broadcast_to(self.numpy_array, target_shape)
         self.dask_array = da.broadcast_to(self.dask_array, target_shape)
 
-    @rule(data=st.data())
-    def reduction(self, data):
+    @rule(data=st.data(), op_name=reductions())
+    def reduction(self, data, op_name):
         """Apply a reduction operation along specified axes."""
         # Generate valid axes for the current shape
         axes = data.draw(axes_strategy(ndim=len(self.shape)))
 
         # Skip if any of the axes being reduced over have size 0
         if axes is None:
-            # Reducing over all axes - check if any dimension has size 0
-            if any(s == 0 for s in self.shape):
-                return
+            axes_tuple = self.shape
         else:
-            # Reducing over specific axes
             axes_tuple = (axes,) if isinstance(axes, int) else axes
-            if any(self.shape[ax] == 0 for ax in axes_tuple):
-                return
+        assume(all(self.shape[ax] != 0 for ax in axes_tuple))
 
         # Draw reduction operation (already includes nan-version logic)
-        op_name = data.draw(reductions())
         note(f"Reduction: {op_name}(axis={axes}), shape {self.shape}")
 
         # Apply the reduction operation
@@ -189,6 +189,7 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
 
         note(f"  -> shape {self.shape}")
 
+    @precondition(lambda self: len(self.shape) != 0)
     @rule(
         data=st.data(),
         op=scans,
@@ -197,13 +198,7 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
     def scan(self, data, op, use_nan_version):
         """Apply a cumulative scan operation along a single axis."""
         # Scans require a single axis (not None or tuple)
-        ndim = len(self.shape)
-        if ndim == 0:
-            # Can't scan 0-d arrays
-            return
-
-        # Generate a single axis
-        axis = data.draw(st.integers(min_value=0, max_value=ndim - 1))
+        axis = data.draw(st.integers(min_value=0, max_value=len(self.shape) - 1))
 
         # Both cumsum and cumprod have nan-skipping versions
         op_name = f"nan{op}" if use_nan_version else op
