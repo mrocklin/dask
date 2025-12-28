@@ -173,7 +173,12 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
         axes = data.draw(axes_strategy(ndim=len(self.shape)))
 
         # Skip if any of the axes being reduced over have size 0
-        if axes is not None:
+        if axes is None:
+            # Reducing over all axes - check if any dimension has size 0
+            if any(s == 0 for s in self.shape):
+                return
+        else:
+            # Reducing over specific axes
             axes_tuple = (axes,) if isinstance(axes, int) else axes
             if any(self.shape[ax] == 0 for ax in axes_tuple):
                 return
@@ -224,7 +229,9 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
         # Suppress warnings during computation (e.g., division by zero)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
-            assert_eq(self.dask_array, self.numpy_array)
+            # Use relaxed tolerance for float32 to handle precision differences
+            rtol = 1e-5 if self.numpy_array.dtype == np.float32 else 1e-7
+            assert_eq(self.dask_array, self.numpy_array, rtol=rtol)
 
 
 # Create the test
