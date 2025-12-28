@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 import operator
-import os
 import warnings
 
 import numpy as np
 import pytest
-
-# Enable array expression mode before importing dask.array
-os.environ["DASK_ARRAY__QUERY_PLANNING"] = "True"
 
 hypothesis = pytest.importorskip("hypothesis")
 
@@ -37,8 +33,6 @@ np.set_printoptions(precision=3, threshold=10, edgeitems=2, linewidth=60)
 @settings(max_examples=10, deadline=None, stateful_step_count=10)
 class DaskArrayStateMachine(RuleBasedStateMachine):
     """Stateful test comparing Dask array operations to NumPy arrays.
-
-    This test runs with array expression mode enabled (DASK_ARRAY__QUERY_PLANNING=True).
 
     Invariant: The Dask array should always produce the same result as the NumPy array.
     """
@@ -71,7 +65,7 @@ class DaskArrayStateMachine(RuleBasedStateMachine):
         # Start with a simple chunking strategy
         self.dask_array = da.from_array(self.numpy_array, chunks=-1)
         note(f"Initialize: shape={self.shape}, dtype={self.numpy_array.dtype}")
-        note(f"Array expr enabled: {da._array_expr_enabled()}")
+        assert da._array_expr_enabled()
 
     @rule(data=st.data())
     def rechunk(self, data):
